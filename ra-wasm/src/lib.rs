@@ -72,7 +72,6 @@ pub fn from_single_file(
     let std_id = FileId(1);
     let core_id = FileId(2);
     let alloc_id = FileId(3);
-
     let mut file_set = FileSet::default();
     file_set.insert(file_id, VfsPath::new_virtual_path("/my_crate/main.rs".to_string()));
     let source_root = SourceRoot::new_local(file_set);
