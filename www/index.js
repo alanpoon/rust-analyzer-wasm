@@ -59,6 +59,7 @@ import { conf, grammar } from './rust-grammar';
 import fake_std from './fake_std.rs';
 import fake_core from './fake_core.rs';
 import fake_alloc from './fake_alloc.rs';
+import WishesStore from './crates_dep.js';
 
 var state;
 var allTokens;
@@ -317,6 +318,7 @@ const createRA = async () => {
 }
 
 const start = async () => {
+    console.log("Loading wasm..")
     var loadingText = document.createTextNode("Loading wasm...");
     document.body.appendChild(loadingText);    
     
@@ -344,20 +346,42 @@ const start = async () => {
         ],
     });
     document.body.removeChild(loadingText);
-    const initRA = async () => {
-        state = await createRA();
-        await registerRA();
-        await state.init(model.getValue(), fake_std, fake_core, fake_alloc);
-        await update();
-        model.onDidChangeContent(update);
-    };
-    initRA();
+   
     const myEditor = monaco.editor.create(document.body, {
         theme: 'vscode-dark-plus',
         model: model
     });
 
     window.onresize = () => myEditor.layout();
+    window.onload = function() {
+        
+        var database = new WishesStore();
+        //database.deletedb("wishes");
+        database.init("wishes", 1); //database name and database version
+        //var extern = [{"crate":"stdx","version":"0.0.1"}];
+        var extern = [{"crate":"serde_json","version":"1.0.91"}];
+        console.log("aaab");
+        setTimeout(function(){
+            var in_db = database.items_list();
+            console.log("in_db",in_db);
+            for (var i =0;i<extern.length;i++){
+                if (!in_db.includes(extern[i].crate)){
+                    console.log("add_crate",extern[i])
+                    database.add_crate('https://crates.io/api/v1/crates/'+extern[i]["crate"]+'/'+extern[i]["version"]+'/download',extern[i]["crate"]);
+                }
+            }
+            const initRA = async () => {
+                state = await createRA();
+                await registerRA();
+                
+                await state.init(model.getValue(), fake_std, fake_core, fake_alloc,{"hh":"j"});
+                
+                await update();
+                model.onDidChangeContent(update);
+            };
+            initRA();
+        },2000)
+    };
 };
 
 start().then(() => {

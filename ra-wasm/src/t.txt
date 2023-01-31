@@ -13,3 +13,114 @@ pub(crate) fn cargo_target_for_crate_root(
             ProjectWorkspace::DetachedFiles { .. } => None,
         })
     }
+
+    try_merge_imports
+
+    let mut buf = String::new();
+            for (file_id, edit) in source_change.source_file_edits {
+                let mut text = db.file_text(file_id).as_ref().to_owned();
+                edit.apply(&mut text);
+                if !skip_header {
+                    let sr = db.file_source_root(file_id);
+                    let sr = db.source_root(sr);
+                    let path = sr.path_for_file(&file_id).unwrap();
+                    format_to!(buf, "//- {}\n", path)
+                }
+                buf.push_str(&text);
+            }
+
+//- /lib.rs
+mod foo;$0
+
+use crate::foo::bar::Baz;
+
+enum E { A, B }
+use E::*;
+
+fn foo() -> i32 {
+    1 + 1
+}
+
+#[cfg(never)]
+fn no() {}
+//- /foo/mod.rs
+pub mod bar;
+
+//- /foo/bar.rs
+pub struct Baz;
+",
+r"
+mod foo;
+
+use crate::foo::bar::Baz;
+
+enum E { A, B }
+use E::*;
+
+fn foo() -> i32 { 92 }
+
+#[cfg(never)]
+fn no() {}
+
+
+pub fn to_crate_graph(
+        &self,
+        load_proc_macro: &mut dyn FnMut(&str, &AbsPath) -> ProcMacroLoadResult,
+        load: &mut dyn FnMut(&AbsPath) -> Option<FileId>,
+        extra_env: &FxHashMap<String, String>,
+    ) -> CrateGraph {
+        let _p = profile::span("ProjectWorkspace::to_crate_graph");
+
+        let mut crate_graph = match self {
+            ProjectWorkspace::Json { project, sysroot, rustc_cfg } => project_json_to_crate_graph(
+                rustc_cfg.clone(),
+                load_proc_macro,
+                load,
+                project,
+                sysroot,
+                extra_env,
+                None,
+            ),
+            ProjectWorkspace::Cargo {
+                cargo,
+                sysroot,
+                rustc,
+                rustc_cfg,
+                cfg_overrides,
+                build_scripts,
+                toolchain: _,
+                target_layout,
+            } => cargo_to_crate_graph(
+                load_proc_macro,
+                load,
+                rustc,
+                cargo,
+                sysroot.as_ref(),
+                rustc_cfg.clone(),
+                cfg_overrides,
+                build_scripts,
+                target_layout.as_deref().map(Arc::from),
+            ),
+            ProjectWorkspace::DetachedFiles { files, sysroot, rustc_cfg } => {
+                detached_files_to_crate_graph(rustc_cfg.clone(), load, files, sysroot, None)
+            }
+        };
+        if crate_graph.patch_cfg_if() {
+            tracing::debug!("Patched std to depend on cfg-if")
+        } else {
+            tracing::debug!("Did not patch std to depend on cfg-if")
+        }
+        crate_graph
+    }
+
+    fn cargo_to_crate_graph(
+    load_proc_macro: &mut dyn FnMut(&str, &AbsPath) -> ProcMacroLoadResult,
+    load: &mut dyn FnMut(&AbsPath) -> Option<FileId>,
+    rustc: &Option<CargoWorkspace>,
+    cargo: &CargoWorkspace,
+    sysroot: Option<&Sysroot>,
+    rustc_cfg: Vec<CfgFlag>,
+    override_cfg: &CfgOverrides,
+    build_scripts: &WorkspaceBuildScripts,
+    target_layout: Option<Arc<str>>,
+) -> CrateGraph {

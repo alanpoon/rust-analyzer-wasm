@@ -9,7 +9,10 @@
   "author": "rust-analyzer developers",
   "license": "(MIT OR Apache-2.0)",
   "dependencies": {
+    "js-untar": "^2.0.0",
+    "jszip-utils": "^0.1.0",
     "monaco-editor": "^0.27.0",
+    "pako": "^2.1.0",
     "raw-loader": "^4.0.2",
     "text-encoding": "^0.7.0"
   },

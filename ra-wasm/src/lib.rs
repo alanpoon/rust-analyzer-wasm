@@ -10,7 +10,7 @@ use ide::{
     SourceRoot, TextSize,
 };
 use ide_db::{
-    base_db::{CrateName, Dependency, Env, FileSet, VfsPath},
+    base_db::{CrateName, Dependency, Env, FileSet, VfsPath,AnchoredPath},
     helpers::{
         insert_use::{ImportGranularity, InsertUseConfig, PrefixKind},
         SnippetCap,
@@ -20,12 +20,28 @@ use ide_db::{
 use wasm_bindgen::prelude::*;
 
 mod to_proto;
-
+mod indexed_db;
 mod return_types;
 use return_types::*;
-
+pub use indexed_db::example;
 pub use wasm_bindgen_rayon::init_thread_pool;
+#[wasm_bindgen]
+extern "C" {
+    // Use `js_namespace` here to bind `console.log(..)` instead of just
+    // `log(..)`
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
 
+    // The `console.log` is quite polymorphic, so we can bind it with multiple
+    // signatures. Note that we need to use `js_name` to ensure we always call
+    // `log` in JS.
+    #[wasm_bindgen(js_namespace = console, js_name = log)]
+    fn log_u32(a: u32);
+
+    // Multiple arguments too!
+    #[wasm_bindgen(js_namespace = console, js_name = log)]
+    fn log_many(a: &str, b: &str);
+}
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
@@ -36,6 +52,7 @@ pub fn start() {
 pub struct WorldState {
     host: AnalysisHost,
     file_id: FileId,
+    crates: js_sys::Array
 }
 
 pub fn create_source_root(name: &str, f: FileId) -> SourceRoot {
@@ -43,7 +60,11 @@ pub fn create_source_root(name: &str, f: FileId) -> SourceRoot {
     file_set.insert(f, VfsPath::new_virtual_path(format!("/{}/src/lib.rs", name)));
     SourceRoot::new_library(file_set)
 }
-
+pub fn create_source_file(name: &str, f: FileId) -> SourceRoot {
+    let mut file_set = FileSet::default();
+    file_set.insert(f, VfsPath::new_virtual_path(name.to_owned()));
+    SourceRoot::new_library(file_set)
+}
 pub fn create_crate(crate_graph: &mut CrateGraph, f: FileId) -> CrateId {
     let mut cfg = CfgOptions::default();
     cfg.insert_atom("unix".into());
@@ -60,52 +81,92 @@ pub fn create_crate(crate_graph: &mut CrateGraph, f: FileId) -> CrateId {
         Vec::new(),
     )
 }
-
+use std::collections::HashMap;
+use toml::Value;
 pub fn from_single_file(
     text: String,
     fake_std: String,
     fake_core: String,
     fake_alloc: String,
+    crate_hash: js_sys::Array
 ) -> (AnalysisHost, FileId) {
+    
     let mut host = AnalysisHost::default();
-    let file_id = FileId(0);
-    let std_id = FileId(1);
-    let core_id = FileId(2);
-    let alloc_id = FileId(3);
-    let mut file_set = FileSet::default();
-    file_set.insert(file_id, VfsPath::new_virtual_path("/my_crate/main.rs".to_string()));
-    let source_root = SourceRoot::new_local(file_set);
-
+    
     let mut change = Change::new();
-    change.set_roots(vec![
-        source_root,
-        create_source_root("std", std_id),
-        create_source_root("core", core_id),
-        create_source_root("alloc", alloc_id),
-    ]);
     let mut crate_graph = CrateGraph::default();
+    
+    let mut to_create_root_arr = vec![
+    ];
+    let mut dep_arr = vec![];
+    let mut file_id_index = 1;
+    for b in crate_hash.iter(){
+        if b.is_object(){
+            let r_crate_name = js_sys::Reflect::get(&b,&"file_name".into()).unwrap_or(JsValue::NULL);
+            let r_anchored = js_sys::Reflect::get(&b,&"anchored".into()).unwrap_or(JsValue::NULL);
+            let r_cargo_toml = js_sys::Reflect::get(&b,&"Cargo.toml".into()).unwrap_or(JsValue::NULL);
+            if r_crate_name !=JsValue::NULL{
+                if let Some(r_crate_name)= r_crate_name.as_string(){
+                    //create_source_root_multiple
+                    //Vec<(FileId,String)>
+                    let mut array_fileid_string = vec![];
+                    if r_anchored.is_object(){
+                        if let Some(obj) = js_sys::Object::try_from(&r_anchored){
+                            for y in js_sys::Object::entries(&obj).iter(){
+                                let arr = js_sys::Array::from(&y);
+                                if arr.length() >= 2{
+                                    let file_id = FileId(file_id_index);
+                                    let anchored_path = arr.get(0).as_string().unwrap();
+                                    array_fileid_string.push((file_id,anchored_path.clone()));
+                                    let text = arr.get(1).as_string().unwrap_or(String::from(""));
+                                    change.change_file(file_id.clone(), Some(Arc::new(text)));
+                                    if anchored_path.contains("/src/lib.rs"){
+                                        let inner_crate = create_crate(&mut crate_graph,file_id);
+                                        let inner_dep = Dependency::new(CrateName::new(&r_crate_name).unwrap(), inner_crate);
+                                        dep_arr.push(inner_dep);
+                                    }
+                                    // let s = format!("!!!anchored_path {:?}",anchored_path);
+                                    // log(&s);
+                                    // let file_id  = FileId(file_id_index);
+                                    // let anchored_path = anchored_path.unwrap().to_owned();
+                                    // let anchored_path_arr :Vec<&str>= anchored_path.split("./").collect();
+                                    // if anchored_path_arr.len() >1{
+                                    //     let revert_filename = format!("/{}/src/{}",r_crate_name,anchored_path_arr.get(1).unwrap());
+                                    //     to_create_root_arr.push(create_source_file(&anchored_path,file_id));
+                                    //     file_set.insert(file_id.clone(), VfsPath::new_virtual_path(anchored_path));
+                                    //     change.change_file(file_id.clone(), Some(Arc::new(text)));
+                                    // }
+                               
+                                    file_id_index+=1;
+                                }
+                            }
+                        }
+                    }
+                    to_create_root_arr.push(create_source_root_multiple(&r_crate_name,array_fileid_string));
+                }
+
+            }
+            
+        }
+    }
+    let mut file_set = FileSet::default();
+    let file_id = FileId(0);
+    file_set.insert(file_id, VfsPath::new_virtual_path("/my_crate/main.rs".to_string()));
     let my_crate = create_crate(&mut crate_graph, file_id);
-    let std_crate = create_crate(&mut crate_graph, std_id);
-    let core_crate = create_crate(&mut crate_graph, core_id);
-    let alloc_crate = create_crate(&mut crate_graph, alloc_id);
-    let core_dep = Dependency::new(CrateName::new("core").unwrap(), core_crate);
-    let alloc_dep = Dependency::new(CrateName::new("alloc").unwrap(), alloc_crate);
-    let std_dep = Dependency::new(CrateName::new("std").unwrap(), std_crate);
-
-    crate_graph.add_dep(std_crate, core_dep.clone()).unwrap();
-    crate_graph.add_dep(std_crate, alloc_dep.clone()).unwrap();
-    crate_graph.add_dep(alloc_crate, core_dep.clone()).unwrap();
-
-    crate_graph.add_dep(my_crate, core_dep).unwrap();
-    crate_graph.add_dep(my_crate, alloc_dep).unwrap();
-    crate_graph.add_dep(my_crate, std_dep).unwrap();
-
+    let source_root = SourceRoot::new_local(file_set.clone());
+    let mut source_root_arr = vec![
+        source_root
+    ];
+    source_root_arr.append(&mut to_create_root_arr);
+    change.set_roots(source_root_arr);
     change.change_file(file_id, Some(Arc::new(text)));
-    change.change_file(std_id, Some(Arc::new(fake_std)));
-    change.change_file(core_id, Some(Arc::new(fake_core)));
-    change.change_file(alloc_id, Some(Arc::new(fake_alloc)));
+    for dep in dep_arr{
+        crate_graph.add_dep(my_crate, dep).unwrap();
+    }
+    
     change.set_crate_graph(crate_graph);
     host.apply_change(change);
+    log("after apply-change");
     (host, file_id)
 }
 
@@ -114,18 +175,24 @@ impl WorldState {
         self.host.analysis()
     }
 }
-
 #[wasm_bindgen]
 impl WorldState {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
+    pub fn new(crates:js_sys::Array) -> Self {
+        let s = format!("new self.crates.clone() {:?}",crates.clone());
+        log(&s);
         let (host, file_id) =
-            from_single_file("".to_owned(), "".to_owned(), "".to_owned(), "".to_owned());
-        Self { host, file_id }
+            from_single_file("".to_owned(), "".to_owned(), "".to_owned(), "".to_owned(),crates.clone());
+        Self { host, file_id ,crates}
     }
-
+    // #[wasm_bindgen(constructor)]
+    // pub async fn new_async() -> Self {
+    //     let (host, file_id) =
+    //         from_single_file("".to_owned(), "".to_owned(), "".to_owned(), "".to_owned());
+    //     Self { host, file_id }
+    // }
     pub fn init(&mut self, code: String, fake_std: String, fake_core: String, fake_alloc: String) {
-        let (host, file_id) = from_single_file(code, fake_std, fake_core, fake_alloc);
+        let (host, file_id) = from_single_file(code, fake_std, fake_core, fake_alloc,self.crates.clone());
         self.host = host;
         self.file_id = file_id;
     }
@@ -512,11 +579,11 @@ impl WorldState {
     }
 }
 
-impl Default for WorldState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// impl Default for WorldState {
+//     fn default() -> Self {
+//         Self::new()
+//     }
+// }
 
 fn file_position(
     line_number: u32,
@@ -546,4 +613,11 @@ fn file_range(
             line_index.offset(end_line_col),
         ),
     }
+}
+pub fn create_source_root_multiple(name: &str, f: Vec<(FileId,String)>) -> SourceRoot {
+    let mut file_set = FileSet::default();
+    for (f,p) in f{
+        file_set.insert(f, VfsPath::new_virtual_path(p));
+    }
+    SourceRoot::new_library(file_set)
 }
